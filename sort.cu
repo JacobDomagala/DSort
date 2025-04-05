@@ -1,43 +1,33 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <stdio.h>
-#include <Windows.h>
+#include <chrono>
+#include <inttypes.h>
+
 #include "curand.h"
 #include "curand_kernel.h"
 #include <algorithm>
 
 #define ARRAY_SIZE 10000000
-#define myCeil(num1,num2) num1 % num2 == 0 ? num1/num2 : 1 + num1/num2 
+#define myCeil(num1,num2) num1 % num2 == 0 ? num1/num2 : 1 + num1/num2
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 {
 	if (code != cudaSuccess)
 	{
 		fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-		if (abort) system("pause"); exit(code);
 	}
 }
 
-struct Timer{
-	LARGE_INTEGER clockFreq;
-	LARGE_INTEGER ticksLastTime;
-	LARGE_INTEGER deltaTicks;
-	float deltaTime;
+struct Timer {
+    int64_t deltaTime = 0; // in milliseconds
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 
-	Timer()
-	{
-		QueryPerformanceFrequency(&clockFreq);
-	}
-
-	void ToggleTimer()
-	{
-		LARGE_INTEGER tmp;
-		QueryPerformanceCounter(&tmp);
-		deltaTicks.QuadPart = tmp.QuadPart - ticksLastTime.QuadPart;
-		deltaTime = (deltaTicks.QuadPart / (float)clockFreq.QuadPart);
-		deltaTime *= 1000;
-		ticksLastTime = tmp;
-	}
+    void ToggleTimer() {
+        auto timeNow = std::chrono::steady_clock::now();
+        deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(timeNow - begin).count();
+        begin = timeNow;
+    }
 };
 
 #pragma region CPU
@@ -47,9 +37,8 @@ void STDSort(unsigned int* h_array)
 	timer.ToggleTimer();
 	std::sort(h_array, h_array + ARRAY_SIZE - 1);
 	timer.ToggleTimer();
-	float time = timer.deltaTime;
 
-	printf("CPU std::sort time: %fms\n", time);
+	printf("CPU std::sort time: %" PRId64 "ms\n", timer.deltaTime);
 }
 #pragma endregion
 
@@ -202,9 +191,9 @@ char ComputeBitCount(unsigned int* d_array)
 			tmpBlockSize = myCeil(tmpBlockSize.x, 1024);
 			MaxReduce << < tmpBlockSize, 1024 >> >(d_reduced, tmpBlockSize.x);
 			cudaDeviceSynchronize();
-		}	
+		}
 	};
-	
+
 	MaxReduce <<< 1, 1024 >>>(d_reduced, tmpBlockSize.x);
 	cudaDeviceSynchronize();
 
@@ -212,7 +201,7 @@ char ComputeBitCount(unsigned int* d_array)
 
 	unsigned int maxVal = h_result;
 
-	// compute num bits 
+	// compute num bits
 	char numBits = 0;
 	for (int i = 31; i > 0; --i)
 	{
@@ -254,8 +243,8 @@ void RadixSortGPU(unsigned int* d_array)
 	const size_t elemsOfOffset = myCeil(gridSize.x, BLOCK_SIZE);
 	const size_t sizeOfOffset = sizeof(unsigned int) * elemsOfOffset;
 
-	char numBits = ComputeBitCount(d_array); 
-	
+	char numBits = ComputeBitCount(d_array);
+
 	cudaMalloc(&d_blockSums, sizeOfBlockSums);
 	cudaMalloc(&d_tmp_Array, sizeOfArray);
 	cudaMalloc(&d_compact, sizeOfArray);
@@ -334,14 +323,13 @@ void RadixSortGPU(unsigned int* d_array)
 			Scatter <<< gridSize, BLOCK_SIZE >>>(d_tmp_Array, d_array, d_onesOffset, d_compact, d_compactScanned, d_compactShiftedtScanned);
 			cudaDeviceSynchronize();
 		}
-		
+
 	}
 	cudaDeviceSynchronize();
 
 	time.ToggleTimer();
-	float sortTime = time.deltaTime;
 
-	printf("GPU RadixSort time: %fms\n", sortTime);
+	printf("GPU RadixSort time: %" PRId64 "ms\n", time.deltaTime);
 
 	cudaFree(d_blockSums);
 	cudaFree(d_tmp_Array);
@@ -352,7 +340,7 @@ void RadixSortGPU(unsigned int* d_array)
 	cudaFree(d_compactShiftedtScanned);
 	cudaFree(d_onesOffsetArray);
 	cudaFree(d_zerosOffsetArray);
-}			 
+}
 
 #pragma endregion
 
@@ -368,17 +356,16 @@ int main(int argc, char** argv)
 		prop.memoryClockRate / 1000);
 	printf(" Memory Bus Width (bits): %d\n",
 		prop.memoryBusWidth);
-	printf(" Total memory (MB): %u\n",
+	printf(" Total memory (MB): %lu\n",
 		prop.totalGlobalMem/(1024*1024));
 	printf(" Peak Memory Bandwidth (GB/s): %f\n\n",
-		2.0*prop.memoryClockRate*(prop.memoryBusWidth / 8) / 1.0e6);
-	
+		2.0*prop.memoryClockRate*(prop.memoryBusWidth / 8.) / 1.0e6);
+
 #pragma endregion
 
 	// Initialize an array on CPU
 	unsigned int* h_array = new unsigned int[ARRAY_SIZE];
-	
-	Timer time;
+
 	unsigned int* d_array;
 	cudaMalloc(&d_array, sizeof(unsigned int)* ARRAY_SIZE);
 
@@ -398,6 +385,4 @@ int main(int argc, char** argv)
 	// clean up
 	cudaFree(d_array);
 	delete[] h_array;
-
-	system("pause");
 }
